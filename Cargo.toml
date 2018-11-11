@@ -1,0 +1,14 @@
+[package]
+name = "ball-tree"
+version = "0.1.0"
+authors = ["Grant Slatton <grantslatton@gmail.com>"]
+include = ["src/**/*", "Cargo.toml"]
+description = "Ball-tree implementation for K-nearest neighbors"
+homepage = "https://github.com/grantslatton/ball-tree"
+repository = "https://github.com/grantslatton/ball-tree"
+keywords = ["ball-tree", "knn", "ml", "neighbor", "prediction"]
+categories = ["data-structures", "science"]
+license = "MIT"
+readme="README.md"
+
+[dependencies]
