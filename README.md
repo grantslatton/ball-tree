@@ -24,7 +24,7 @@ Graphically:
    |       F     |
     \ E         /
      \_________/
-``
+```
 
 In the diagram, `A` is closer to `B` than to `S`, and because `S` bounds
 `C`, `D`, `E`, `F`, and `G`, it can be determined that `A` it is necessarily 
