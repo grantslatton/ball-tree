@@ -97,7 +97,6 @@ fn bounding_sphere<P: Point>(points: &[P]) -> Sphere<P> {
 fn partition<P: Point, V>(mut points: Vec<P>, mut values: Vec<V>) -> ((Vec<P>, Vec<V>), (Vec<P>, Vec<V>)) {
     assert!(points.len() >= 2);
     assert_eq!(points.len(), values.len());
-
     let a_i = points
         .iter()
         .enumerate()
@@ -110,7 +109,7 @@ fn partition<P: Point, V>(mut points: Vec<P>, mut values: Vec<V>) -> ((Vec<P>, V
         .max_by_key(|(_,b)| OrdF64::new(points[a_i].distance(b)))
         .unwrap().0;
     
-    let (a_i, b_i) = (a_i.max(b_i), a_i.min(b_i));
+    let (a_i, b_i) = (a_i.max(b_i.max(1)), a_i.min(b_i).min(points.len()-2));
 
     let (mut aps, mut avs) = (vec![points.swap_remove(a_i)], vec![values.swap_remove(a_i)]);
     let (mut bps, mut bvs) = (vec![points.swap_remove(b_i)], vec![values.swap_remove(b_i)]);
