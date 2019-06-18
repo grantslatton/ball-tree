@@ -4,12 +4,12 @@ use std::cmp::Ordering;
 /// A `Point` is something that exists in some sort of metric space, and
 /// can thus calculate its distance to another `Point`, and can be moved
 /// a certain distance towards another `Point`.
-pub trait Point : Sized {
+pub trait Point : Sized + PartialEq {
     /// Distances should be positive, finite `f64`s. It is undefined behavior to
     /// return a negative, infinite, or `NaN` result.
     ///
-    /// Distance should satisfy the triangle inequality. That is, `a.distance(c)` 
-    /// must be less or equal to than `a.distance(b) + b.distance(c)`. 
+    /// Distance should satisfy the triangle inequality. That is, `a.distance(c)`
+    /// must be less or equal to than `a.distance(b) + b.distance(c)`.
     fn distance(&self, other: &Self) -> f64;
 
     /// If `d` is `0`, a point equal to the `self` should be returned. If `d` is equal
@@ -72,7 +72,7 @@ fn bounding_sphere<P: Point>(points: &[P]) -> Sphere<P> {
         .unwrap();
 
     let mut center: P = midpoint(a, b);
-    let mut radius = center.distance(b);
+    let mut radius = center.distance(b).max(std::f64::EPSILON);
 
     loop {
         match points.iter().filter(|p| center.distance(p) > radius).next() {
@@ -93,7 +93,7 @@ fn bounding_sphere<P: Point>(points: &[P]) -> Sphere<P> {
 // * Partition the points into two groups: those closest to `a` and those closest to `b`
 //
 // This doesn't necessarily form the best partition, since `a` and `b` are not guaranteed
-// to be the most distance pair of points, but it's usually sufficient.
+// to be the most distant pair of points, but it's usually sufficient.
 fn partition<P: Point, V>(mut points: Vec<P>, mut values: Vec<V>) -> ((Vec<P>, Vec<V>), (Vec<P>, Vec<V>)) {
     assert!(points.len() >= 2);
     assert_eq!(points.len(), values.len());
@@ -109,7 +109,7 @@ fn partition<P: Point, V>(mut points: Vec<P>, mut values: Vec<V>) -> ((Vec<P>, V
         .enumerate()
         .max_by_key(|(_,b)| OrdF64::new(points[a_i].distance(b)))
         .unwrap().0;
-    
+
     let (a_i, b_i) = (a_i.max(b_i), a_i.min(b_i));
 
     let (mut aps, mut avs) = (vec![points.swap_remove(a_i)], vec![values.swap_remove(a_i)]);
@@ -128,26 +128,26 @@ fn partition<P: Point, V>(mut points: Vec<P>, mut values: Vec<V>) -> ((Vec<P>, V
     ((aps, avs), (bps, bvs))
 }
 
-// We could add a `Null` variant to support empty trees, but would that actually be used/useful?
 enum BallTreeInner<P, V> {
-    Leaf(P, V),
+    Empty,
+    Leaf(P, Vec<V>),
     // The sphere is a bounding sphere that encompasses this node (both children)
     Branch(Sphere<P>, Box<BallTreeInner<P, V>>, Box<BallTreeInner<P, V>>),
 }
 
 impl <P: Point, V> BallTreeInner<P, V> {
-    fn new(mut points: Vec<P>, mut values: Vec<V>) -> Self {
-        assert!(points.len() > 0, "Cannot construct a ball-tree with zero points");
+    fn new(mut points: Vec<P>, values: Vec<V>) -> Self {
         assert_eq!(
-            points.len(), values.len(), 
-            "Given two vectors of differing lengths. points: {}, values: {}", 
-            points.len(), 
+            points.len(), values.len(),
+            "Given two vectors of differing lengths. points: {}, values: {}",
+            points.len(),
             values.len()
         );
 
-        if points.len() == 1 {
-            let (p, v) = (points.swap_remove(0), values.swap_remove(0));
-            BallTreeInner::Leaf(p, v)
+        if points.is_empty() {
+          BallTreeInner::Empty
+        } else if points.iter().all(|p| p == &points[0]) {
+            BallTreeInner::Leaf(points.pop().unwrap(), values)
         } else {
             let sphere = bounding_sphere(&points);
             let ((aps, avs), (bps, bvs)) = partition(points, values);
@@ -158,89 +158,103 @@ impl <P: Point, V> BallTreeInner<P, V> {
 
     fn distance(&self, p: &P) -> f64 {
         match self {
+            BallTreeInner::Empty => std::f64::INFINITY,
             // The distance to a leaf is the distance to the single point inside of it
             BallTreeInner::Leaf(p0, _) => p.distance(p0),
-
             // The distance to a branch is the distance to the edge of the bounding sphere
             BallTreeInner::Branch(sphere, _, _) => p.distance(&sphere.center) - sphere.radius
         }
     }
+}
 
-    // Maintain a priority queue of the nodes that are closest to the provided `point`. If we
-    // pop a leaf from the queue, that leaf is necessarily the next closest point. If we
-    // pop a branch from the queue, add its children. The priority of a node is its 
-    // `distance` as defined above.
-    fn knn(&self, point: &P, mut k: usize, mut result: impl FnMut(&P, f64, &V)) {
 
-        // We need a little wrapper to hold our priority queue elements for two reasons:
-        // * Rust's BinaryHeap is a max-heap, and we need a min-heap, so we invert the
-        //   ordering
-        // * We only want to order based on the first element, so we need a custom 
-        //   implementation rather than deriving the order (which would require the value
-        //   to be orderable which is not necessary).
-
-        struct Item<T>(f64, T);
-        impl <T> PartialEq for Item<T> {
-            fn eq(&self, other: &Self) -> bool {
-                self.0 == other.0
-            }
-        }
-        impl <T> Eq for Item<T> {}
-        impl <T> PartialOrd for Item<T> {
-            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-                self.0.partial_cmp(&other.0).map(|ordering| ordering.reverse())
-            }
-        }
-        impl <T> Ord for Item<T> {
-            fn cmp(&self, other: &Self) -> Ordering {
-                self.partial_cmp(other).unwrap()
-            }
-        }
-
-        // Initialize the queue with our children as our only elements
-        let mut balls: BinaryHeap<_> = vec![Item(0.0, self)].into();
-
-        while let Some(Item(d, ball)) = balls.pop() {
-            if k == 0 {
-                break;
-            }
-            match ball {
-                BallTreeInner::Leaf(p, v) => {
-                    result(p, d, v);
-                    k -= 1;
-                },
-                BallTreeInner::Branch(_, a, b) => {
-                    let d_a = a.distance(point);
-                    let d_b = b.distance(point);
-                    balls.push(Item(d_a, a));
-                    balls.push(Item(d_b, b));
-                },
-            }
-        }
+// We need a little wrapper to hold our priority queue elements for two reasons:
+// * Rust's BinaryHeap is a max-heap, and we need a min-heap, so we invert the
+//   ordering
+// * We only want to order based on the first element, so we need a custom
+//   implementation rather than deriving the order (which would require the value
+//   to be orderable which is not necessary).
+struct Item<T>(f64, T);
+impl <T> PartialEq for Item<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl <T> Eq for Item<T> {}
+impl <T> PartialOrd for Item<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.0.partial_cmp(&other.0).map(|ordering| ordering.reverse())
+    }
+}
+impl <T> Ord for Item<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap()
     }
 }
 
-/// A `BallTree` is a space-partitioning data-structure that allows for finding 
-/// nearest neighbors in logarithmic time. 
+// Maintain a priority queue of the nodes that are closest to the provided `point`. If we
+// pop a leaf from the queue, that leaf is necessarily the next closest point. If we
+// pop a branch from the queue, add its children. The priority of a node is its
+// `distance` as defined above.
+struct Iter<'a, P, V> {
+    point: &'a P,
+    balls: BinaryHeap<Item<&'a BallTreeInner<P, V>>>,
+    i: usize,
+    max_radius: f64,
+}
+
+impl <'a, P: 'a + Point, V: 'a> Iterator for Iter<'a, P, V> {
+    type Item = (&'a P, f64, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.balls.len() > 0 {
+            // Peek in the leaf case, because we might need to visit this leaf multiple
+            // times (if it has multiple values).
+            if let Item(d, BallTreeInner::Leaf(p, vs)) = self.balls.peek().unwrap() {
+                if self.i < vs.len() && *d <= self.max_radius {
+                    self.i += 1;
+                    return Some((p, *d, &vs[self.i - 1]));
+                }
+            }
+            // Reset index for the next leaf we encounter
+            self.i = 0;
+            // Expand branch nodes
+            if let Item(_, BallTreeInner::Branch(_, a, b)) = self.balls.pop().unwrap() {
+                let d_a = a.distance(self.point);
+                let d_b = b.distance(self.point);
+                if d_a <= self.max_radius {
+                    self.balls.push(Item(d_a, a));
+                }
+                if d_b <= self.max_radius {
+                    self.balls.push(Item(d_b, b));
+                }
+            }
+        }
+        None
+    }
+}
+
+/// A `BallTree` is a space-partitioning data-structure that allows for finding
+/// nearest neighbors in logarithmic time.
 ///
 /// It does this by partitioning data into a series of nested bounding spheres
-/// ("balls" in the literature). Spheres are used because it is trivial to 
+/// ("balls" in the literature). Spheres are used because it is trivial to
 /// compute the distance between a point and a sphere (distance to the sphere's
 /// center minus thte radius). The key observation is that a potential neighbor
-/// is necessarily closer than all neighbors that are located inside of a 
+/// is necessarily closer than all neighbors that are located inside of a
 /// bounding sphere that is farther than the aforementioned neighbor.
 ///
 /// Graphically:
 /// ```text
 ///
-///    A -  
+///    A -
 ///    |  ----         distance(A, B) = 4
 ///    |      - B      distance(A, S) = 6
-///     |       
+///     |
 ///      |
 ///      |    S
 ///        --------
-///      /        G \ 
+///      /        G \
 ///     /   C        \
 ///    |           D |
 ///    |       F     |
@@ -249,7 +263,7 @@ impl <P: Point, V> BallTreeInner<P, V> {
 ///```
 ///
 /// In the diagram, `A` is closer to `B` than to `S`, and because `S` bounds
-/// `C`, `D`, `E`, `F`, and `G`, it can be determined that `A` it is necessarily 
+/// `C`, `D`, `E`, `F`, and `G`, it can be determined that `A` it is necessarily
 /// closer to `B` than the other points without even computing exact distances
 /// to them.
 ///
@@ -259,7 +273,7 @@ impl <P: Point, V> BallTreeInner<P, V> {
 /// this functionality is unneeded, `()` can be used as a value.
 ///
 /// This implementation returns the nearest neighbors, their distances, and their
-/// associated values. Returning the distances allows the user to perform some 
+/// associated values. Returning the distances allows the user to perform some
 /// sort of weighted interpolation of the neighbors for predictive purposes.
 pub struct BallTree<P, V>(BallTreeInner<P, V>);
 
@@ -273,24 +287,33 @@ impl <P: Point, V> BallTree<P, V> {
         BallTree(BallTreeInner::new(points, values))
     }
 
-    /// Given a `point` and a number of neigbors to look for, find the `k` nearest
-    /// neighbors (or fewer, if the ball tree contains fewer than `k` points).
+    /// Given a `point`, return an `Iterator` that yields neighbors from closest to
+    /// farthest. To get the K nearest neighbors, simply `take` K from the iterator.
     ///
     /// The neighbor, its distance, and associated value is returned.
-    ///
-    /// We allow the caller to pass in a result-consuming closure rather than
-    /// return a `Vec` to allow the caller to control allocation.
-    pub fn knn(&self, point: &P, k: usize, result: impl FnMut(&P, f64, &V)) {
-        self.0.knn(point, k, result)
+    pub fn nn<'a>(&'a self, point: &'a P) -> impl Iterator<Item = (&'a P, f64, &'a V)> + 'a {
+        self.nn_within(point, std::f64::INFINITY)
+    }
+
+    /// The same as `nn` but only consider neighbors whose distance is `<= max_radius`
+    pub fn nn_within<'a>(&'a self, point: &'a P, max_radius: f64) -> impl Iterator<Item = (&'a P, f64, &'a V)> + 'a {
+        Iter {
+            point,
+            balls: vec![Item(self.0.distance(point), &self.0)].into(),
+            i: 0,
+            max_radius,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{Rng, SeedableRng};
+    use rand_chacha::ChaChaRng;
 
     #[derive(Debug, Clone, Copy, PartialEq)]
-    struct TestPoint(f64); 
+    struct TestPoint(f64);
 
     impl Point for TestPoint {
         fn distance(&self, other: &Self) -> f64 {
@@ -308,34 +331,54 @@ mod tests {
 
     #[test]
     fn test() {
-        let points = (0_u32..1000).map(|x| TestPoint(x as f64)).collect::<Vec<_>>();
-        let values = (0_u32..1000).map(|x| x.pow(2)).collect::<Vec<_>>();
+        let mut rng: ChaChaRng = SeedableRng::from_seed([1,2,3,4,5,6,7,8,1,2,3,4,5,6,7,8,1,2,3,4,5,6,7,8,1,2,3,4,5,6,7,8,]);
 
-        let tree = BallTree::new(points.clone(), values.clone());
+        for _ in 0..500 {
 
-        let n = 10;
+            let n = rng.gen::<usize>() % 100;
 
-        for p in vec![123.4, 567.8, 99999.9] {
-            let mut results = vec![];
-            tree.knn(&TestPoint(p), n, |k, d, v| results.push((*k, d, *v)));
-            
-            let mut reference = points
-                .clone()
-                .into_iter()
-                .zip(values.clone())
-                .map(|(k,v)| (k, (k.0 - p).abs(), v))
-                .collect::<Vec<_>>();
+            let mut points = vec![];
+            let mut values = vec![];
 
-            reference.sort_by_key(|(_, d, _)| OrdF64::new(*d));
+            for v in 0..n {
+                let p = TestPoint((rng.gen::<u32>() % 100) as f64);
+                points.push(p);
+                values.push(v);
+            }
 
-            let expected_results = reference
-                .into_iter()
-                .take(n)
-                .collect::<Vec<_>>();
+            let tree = BallTree::new(points.clone(), values.clone());
 
-            assert_eq!(expected_results, results);
+            for _ in 0..100 {
+                let point = TestPoint(((rng.gen::<u32>() % 200) as i32 - 50) as f64);
+
+                let mut previous_d = 0.0;
+
+
+                let max_radius = (rng.gen::<f64>() * 200.0).floor();
+
+                let mut expected_values = points
+                    .iter()
+                    .zip(&values)
+                    .filter(|(p,_)| p.distance(&point) <= max_radius)
+                    .map(|(_, v)| v)
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                let mut found_values = vec![];
+
+                for (p, d, v) in tree.nn_within(&point, max_radius) {
+                    assert_eq!(point.distance(p), d);
+                    assert!(d >= previous_d);
+                    assert!(d <= max_radius);
+                    previous_d = d;
+                    found_values.push(*v);
+                }
+
+                expected_values.sort();
+                found_values.sort();
+                assert_eq!(expected_values, found_values);
+            }
         }
-
     }
-
 }
+
