@@ -1,10 +1,10 @@
-use std::collections::BinaryHeap;
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 
 /// A `Point` is something that exists in some sort of metric space, and
 /// can thus calculate its distance to another `Point`, and can be moved
 /// a certain distance towards another `Point`.
-pub trait Point : Sized + PartialEq {
+pub trait Point: Sized + PartialEq {
     /// Distances should be positive, finite `f64`s. It is undefined behavior to
     /// return a negative, infinite, or `NaN` result.
     ///
@@ -82,7 +82,7 @@ fn bounding_sphere<P: Point>(points: &[P]) -> Sphere<P> {
                 let d = c_to_p - radius;
                 center = center.move_towards(p, d);
                 radius = radius * 1.01;
-            },
+            }
         }
     }
 }
@@ -94,28 +94,33 @@ fn bounding_sphere<P: Point>(points: &[P]) -> Sphere<P> {
 //
 // This doesn't necessarily form the best partition, since `a` and `b` are not guaranteed
 // to be the most distant pair of points, but it's usually sufficient.
-fn partition<P: Point, V>(mut points: Vec<P>, mut values: Vec<V>) -> ((Vec<P>, Vec<V>), (Vec<P>, Vec<V>)) {
+fn partition<P: Point, V>(
+    mut points: Vec<P>,
+    mut values: Vec<V>,
+) -> ((Vec<P>, Vec<V>), (Vec<P>, Vec<V>)) {
     assert!(points.len() >= 2);
     assert_eq!(points.len(), values.len());
 
     let a_i = points
         .iter()
         .enumerate()
-        .max_by_key(|(_,a)| OrdF64::new(points[0].distance(a)))
-        .unwrap().0;
+        .max_by_key(|(_, a)| OrdF64::new(points[0].distance(a)))
+        .unwrap()
+        .0;
 
     let b_i = points
         .iter()
         .enumerate()
-        .max_by_key(|(_,b)| OrdF64::new(points[a_i].distance(b)))
-        .unwrap().0;
+        .max_by_key(|(_, b)| OrdF64::new(points[a_i].distance(b)))
+        .unwrap()
+        .0;
 
     let (a_i, b_i) = (a_i.max(b_i), a_i.min(b_i));
 
     let (mut aps, mut avs) = (vec![points.swap_remove(a_i)], vec![values.swap_remove(a_i)]);
     let (mut bps, mut bvs) = (vec![points.swap_remove(b_i)], vec![values.swap_remove(b_i)]);
 
-    for (p,v) in points.into_iter().zip(values) {
+    for (p, v) in points.into_iter().zip(values) {
         if aps[0].distance(&p) < bps[0].distance(&p) {
             aps.push(p);
             avs.push(v);
@@ -132,20 +137,25 @@ enum BallTreeInner<P, V> {
     Empty,
     Leaf(P, Vec<V>),
     // The sphere is a bounding sphere that encompasses this node (both children)
-    Branch(Sphere<P>, Box<BallTreeInner<P, V>>, Box<BallTreeInner<P, V>>),
+    Branch(
+        Sphere<P>,
+        Box<BallTreeInner<P, V>>,
+        Box<BallTreeInner<P, V>>,
+    ),
 }
 
-impl <P: Point, V> BallTreeInner<P, V> {
+impl<P: Point, V> BallTreeInner<P, V> {
     fn new(mut points: Vec<P>, values: Vec<V>) -> Self {
         assert_eq!(
-            points.len(), values.len(),
+            points.len(),
+            values.len(),
             "Given two vectors of differing lengths. points: {}, values: {}",
             points.len(),
             values.len()
         );
 
         if points.is_empty() {
-          BallTreeInner::Empty
+            BallTreeInner::Empty
         } else if points.iter().all(|p| p == &points[0]) {
             BallTreeInner::Leaf(points.pop().unwrap(), values)
         } else {
@@ -162,11 +172,10 @@ impl <P: Point, V> BallTreeInner<P, V> {
             // The distance to a leaf is the distance to the single point inside of it
             BallTreeInner::Leaf(p0, _) => p.distance(p0),
             // The distance to a branch is the distance to the edge of the bounding sphere
-            BallTreeInner::Branch(sphere, _, _) => p.distance(&sphere.center) - sphere.radius
+            BallTreeInner::Branch(sphere, _, _) => p.distance(&sphere.center) - sphere.radius,
         }
     }
 }
-
 
 // We need a little wrapper to hold our priority queue elements for two reasons:
 // * Rust's BinaryHeap is a max-heap, and we need a min-heap, so we invert the
@@ -175,18 +184,20 @@ impl <P: Point, V> BallTreeInner<P, V> {
 //   implementation rather than deriving the order (which would require the value
 //   to be orderable which is not necessary).
 struct Item<T>(f64, T);
-impl <T> PartialEq for Item<T> {
+impl<T> PartialEq for Item<T> {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
     }
 }
-impl <T> Eq for Item<T> {}
-impl <T> PartialOrd for Item<T> {
+impl<T> Eq for Item<T> {}
+impl<T> PartialOrd for Item<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.0.partial_cmp(&other.0).map(|ordering| ordering.reverse())
+        self.0
+            .partial_cmp(&other.0)
+            .map(|ordering| ordering.reverse())
     }
 }
-impl <T> Ord for Item<T> {
+impl<T> Ord for Item<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other).unwrap()
     }
@@ -203,7 +214,7 @@ struct Iter<'a, P, V> {
     max_radius: f64,
 }
 
-impl <'a, P: 'a + Point, V: 'a> Iterator for Iter<'a, P, V> {
+impl<'a, P: 'a + Point, V: 'a> Iterator for Iter<'a, P, V> {
     type Item = (&'a P, f64, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -277,8 +288,7 @@ impl <'a, P: 'a + Point, V: 'a> Iterator for Iter<'a, P, V> {
 /// sort of weighted interpolation of the neighbors for predictive purposes.
 pub struct BallTree<P, V>(BallTreeInner<P, V>);
 
-impl <P: Point, V> BallTree<P, V> {
-
+impl<P: Point, V> BallTree<P, V> {
     /// Construct this `BallTree`. Construction is somewhat expensive, so `BallTree`s
     /// are best constructed once and then used repeatedly.
     ///
@@ -296,7 +306,11 @@ impl <P: Point, V> BallTree<P, V> {
     }
 
     /// The same as `nn` but only consider neighbors whose distance is `<= max_radius`
-    pub fn nn_within<'a>(&'a self, point: &'a P, max_radius: f64) -> impl Iterator<Item = (&'a P, f64, &'a V)> + 'a {
+    pub fn nn_within<'a>(
+        &'a self,
+        point: &'a P,
+        max_radius: f64,
+    ) -> impl Iterator<Item = (&'a P, f64, &'a V)> + 'a {
         Iter {
             point,
             balls: vec![Item(self.0.distance(point), &self.0)].into(),
@@ -331,10 +345,12 @@ mod tests {
 
     #[test]
     fn test() {
-        let mut rng: ChaChaRng = SeedableRng::from_seed([1,2,3,4,5,6,7,8,1,2,3,4,5,6,7,8,1,2,3,4,5,6,7,8,1,2,3,4,5,6,7,8,]);
+        let mut rng: ChaChaRng = SeedableRng::from_seed([
+            1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5,
+            6, 7, 8,
+        ]);
 
         for _ in 0..500 {
-
             let n = rng.gen::<usize>() % 100;
 
             let mut points = vec![];
@@ -353,13 +369,12 @@ mod tests {
 
                 let mut previous_d = 0.0;
 
-
                 let max_radius = (rng.gen::<f64>() * 200.0).floor();
 
                 let mut expected_values = points
                     .iter()
                     .zip(&values)
-                    .filter(|(p,_)| p.distance(&point) <= max_radius)
+                    .filter(|(p, _)| p.distance(&point) <= max_radius)
                     .map(|(_, v)| v)
                     .cloned()
                     .collect::<Vec<_>>();
@@ -381,4 +396,3 @@ mod tests {
         }
     }
 }
-
