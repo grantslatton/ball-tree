@@ -27,6 +27,37 @@ fn midpoint<P: Point>(a: &P, b: &P) -> P {
     a.move_towards(b, d / 2.0)
 }
 
+/// Implement `Point` in the normal `D` dimensional Euclidean way for all arrays of floats. For example, a 2D point
+/// would be a `[f64; 2]`.
+impl<const D: usize> Point for [f64; D] {
+    fn distance(&self, other: &Self) -> f64 {
+        self.iter()
+            .zip(other)
+            .map(|(a, b)| (*a - *b).powi(2))
+            .sum::<f64>()
+            .sqrt()
+    }
+
+    fn move_towards(&self, other: &Self, d: f64) -> Self {
+        let mut result = self.clone();
+
+        let distance = self.distance(other);
+
+        // Don't want to get a NaN in the division below
+        if distance == 0.0 {
+            return result;
+        }
+
+        let scale = d / self.distance(other);
+
+        for i in 0..D {
+            result[i] += scale * (other[i] - self[i]);
+        }
+
+        result
+    }
+}
+
 // A little helper to allow us to use comparative functions on `f64`s by asserting that
 // `NaN` isn't present.
 #[derive(PartialEq, PartialOrd)]
@@ -207,15 +238,15 @@ impl<T> Ord for Item<T> {
 // pop a leaf from the queue, that leaf is necessarily the next closest point. If we
 // pop a branch from the queue, add its children. The priority of a node is its
 // `distance` as defined above.
-struct Iter<'a, P, V> {
-    point: &'a P,
-    balls: BinaryHeap<Item<&'a BallTreeInner<P, V>>>,
+struct Iter<'tree, 'query, P, V> {
+    point: &'query P,
+    balls: &'query mut BinaryHeap<Item<&'tree BallTreeInner<P, V>>>,
     i: usize,
     max_radius: f64,
 }
 
-impl<'a, P: 'a + Point, V: 'a> Iterator for Iter<'a, P, V> {
-    type Item = (&'a P, f64, &'a V);
+impl<'tree, 'query, P: Point, V> Iterator for Iter<'tree, 'query, P, V> {
+    type Item = (&'tree P, f64, &'tree V);
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.balls.len() > 0 {
@@ -242,6 +273,12 @@ impl<'a, P: 'a + Point, V: 'a> Iterator for Iter<'a, P, V> {
             }
         }
         None
+    }
+}
+
+impl<'tree, 'query, P, V> Drop for Iter<'tree, 'query, P, V> {
+    fn drop(&mut self) {
+        self.balls.clear();
     }
 }
 
@@ -297,26 +334,58 @@ impl<P: Point, V> BallTree<P, V> {
         BallTree(BallTreeInner::new(points, values))
     }
 
+    /// Query this `BallTree`. The `Query` object provides a nearest-neighbor API and internally re-uses memory to avoid
+    /// allocations on repeated queries.
+    pub fn query(&self) -> Query<P, V> {
+        Query {
+            ball_tree: self,
+            balls: Default::default(),
+        }
+    }
+}
+
+pub struct Query<'tree, P, V> {
+    ball_tree: &'tree BallTree<P, V>,
+    balls: BinaryHeap<Item<&'tree BallTreeInner<P, V>>>,
+}
+
+impl<'tree, P: Point, V> Query<'tree, P, V> {
     /// Given a `point`, return an `Iterator` that yields neighbors from closest to
     /// farthest. To get the K nearest neighbors, simply `take` K from the iterator.
     ///
-    /// The neighbor, its distance, and associated value is returned.
-    pub fn nn<'a>(&'a self, point: &'a P) -> impl Iterator<Item = (&'a P, f64, &'a V)> + 'a {
-        self.nn_within(point, std::f64::INFINITY)
+    /// The neighbor, its distance, and associated value are returned.
+    pub fn nn<'query>(
+        &'query mut self,
+        point: &'query P,
+    ) -> impl Iterator<Item = (&'tree P, f64, &'tree V)> + 'query {
+        self.nn_within(point, f64::INFINITY)
     }
 
-    /// The same as `nn` but only consider neighbors whose distance is `<= max_radius`
-    pub fn nn_within<'a>(
-        &'a self,
-        point: &'a P,
+    /// The same as `nn` but only consider neighbors whose distance is `<= max_radius`.
+    pub fn nn_within<'query>(
+        &'query mut self,
+        point: &'query P,
         max_radius: f64,
-    ) -> impl Iterator<Item = (&'a P, f64, &'a V)> + 'a {
+    ) -> impl Iterator<Item = (&'tree P, f64, &'tree V)> + 'query {
+        let balls = &mut self.balls;
+        balls.push(Item(self.ball_tree.0.distance(point), &self.ball_tree.0));
         Iter {
             point,
-            balls: vec![Item(self.0.distance(point), &self.0)].into(),
+            balls,
             i: 0,
             max_radius,
         }
+    }
+
+    /// Return the size in bytes of the memory this `Query` is keeping internally to avoid allocation.
+    pub fn allocated_size(&self) -> usize {
+        self.balls.capacity() * std::mem::size_of::<Item<&'tree BallTreeInner<P, V>>>()
+    }
+
+    /// The `Query` object re-uses memory internally to avoid allocation. This method deallocates that memory.
+    pub fn deallocate_memory(&mut self) {
+        assert!(self.balls.is_empty());
+        self.balls.shrink_to_fit();
     }
 }
 
@@ -325,74 +394,95 @@ mod tests {
     use super::*;
     use rand::{Rng, SeedableRng};
     use rand_chacha::ChaChaRng;
-
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    struct TestPoint(f64);
-
-    impl Point for TestPoint {
-        fn distance(&self, other: &Self) -> f64 {
-            (self.0 - other.0).abs()
-        }
-
-        fn move_towards(&self, other: &Self, d: f64) -> Self {
-            if self.0 > other.0 {
-                TestPoint(self.0 - d)
-            } else {
-                TestPoint(self.0 + d)
-            }
-        }
-    }
+    use std::collections::HashSet;
 
     #[test]
-    fn test() {
-        let mut rng: ChaChaRng = SeedableRng::from_seed([
-            1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5,
-            6, 7, 8,
-        ]);
+    fn test_3d_points() {
+        let mut rng: ChaChaRng = SeedableRng::seed_from_u64(0xcb42c94d23346e96);
 
-        for _ in 0..500 {
-            let n = rng.gen::<usize>() % 100;
+        macro_rules! random_small_f64 {
+            () => {
+                rng.gen_range(-100.0, 100.0)
+            };
+        }
+
+        macro_rules! random_3d_point {
+            () => {
+                [
+                    random_small_f64!(),
+                    random_small_f64!(),
+                    random_small_f64!(),
+                ]
+            };
+        }
+
+        for _ in 0..1000 {
+            let point_count = rng.gen_range(0, 100usize);
 
             let mut points = vec![];
             let mut values = vec![];
 
-            for v in 0..n {
-                let p = TestPoint((rng.gen::<u32>() % 100) as f64);
-                points.push(p);
-                values.push(v);
+            for _ in 0..point_count {
+                let point = random_3d_point!();
+                let value = rng.gen::<u64>();
+                points.push(point);
+                values.push(value);
             }
 
             let tree = BallTree::new(points.clone(), values.clone());
 
+            let mut query = tree.query();
+
             for _ in 0..100 {
-                let point = TestPoint(((rng.gen::<u32>() % 200) as i32 - 50) as f64);
+                let point = random_3d_point!();
+                let max_radius = rng.gen_range(0.0, 110.0);
 
-                let mut previous_d = 0.0;
-
-                let max_radius = (rng.gen::<f64>() * 200.0).floor();
-
-                let mut expected_values = points
+                let expected_values = points
                     .iter()
                     .zip(&values)
                     .filter(|(p, _)| p.distance(&point) <= max_radius)
                     .map(|(_, v)| v)
                     .cloned()
-                    .collect::<Vec<_>>();
+                    .collect::<HashSet<_>>();
 
-                let mut found_values = vec![];
+                let mut found_values = HashSet::new();
 
-                for (p, d, v) in tree.nn_within(&point, max_radius) {
+                let mut previous_d = 0.0;
+                for (p, d, v) in query.nn_within(&point, max_radius) {
                     assert_eq!(point.distance(p), d);
                     assert!(d >= previous_d);
                     assert!(d <= max_radius);
                     previous_d = d;
-                    found_values.push(*v);
+                    found_values.insert(*v);
                 }
 
-                expected_values.sort();
-                found_values.sort();
                 assert_eq!(expected_values, found_values);
             }
+
+            assert!(query.allocated_size() > 0);
+            // 2 (branching factor) * 8 (pointer size) * point count rounded up (max of 4 due to minimum vec sizing)
+            assert!(query.allocated_size() <= 2 * 8 * point_count.next_power_of_two().max(4));
+
+            query.deallocate_memory();
+            assert_eq!(query.allocated_size(), 0);
         }
+    }
+
+    #[test]
+    fn test_point_array_impls() {
+        assert_eq!([5.0].distance(&[7.0]), 2.0);
+        assert_eq!([5.0].move_towards(&[3.0], 1.0), [4.0]);
+
+        assert_eq!([5.0, 3.0].distance(&[7.0, 5.0]), 2.0 * 2f64.sqrt());
+        assert_eq!(
+            [5.0, 3.0].move_towards(&[3.0, 1.0], 2f64.sqrt()),
+            [4.0, 2.0]
+        );
+
+        assert_eq!([0.0, 0.0, 0.0, 0.0].distance(&[2.0, 2.0, 2.0, 2.0]), 4.0);
+        assert_eq!(
+            [0.0, 0.0, 0.0, 0.0].move_towards(&[2.0, 2.0, 2.0, 2.0], 8.0),
+            [4.0, 4.0, 4.0, 4.0]
+        );
     }
 }
