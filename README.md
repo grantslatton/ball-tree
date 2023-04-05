@@ -4,7 +4,7 @@ nearest neighbors in logarithmic time.
 It does this by partitioning data into a series of nested bounding spheres
 ("balls" in the literature). Spheres are used because it is trivial to 
 compute the distance between a point and a sphere (distance to the sphere's
-center minus thte radius). The key observation is that a potential neighbor
+center minus the radius). The key observation is that a potential neighbor
 is necessarily closer than all neighbors that are located inside of a 
 bounding sphere that is farther than the aforementioned neighbor.
 

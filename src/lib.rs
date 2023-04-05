@@ -243,12 +243,13 @@ impl<T> Ord for Item<T> {
     }
 }
 
+/// Iterator over the nearest neighbors.
 // Maintain a priority queue of the nodes that are closest to the provided `point`. If we
 // pop a leaf from the queue, that leaf is necessarily the next closest point. If we
 // pop a branch from the queue, add its children. The priority of a node is its
 // `distance` as defined above.
 #[derive(Debug)]
-struct Iter<'tree, 'query, P, V> {
+pub struct Iter<'tree, 'query, P, V> {
     point: &'query P,
     balls: &'query mut BinaryHeap<Item<&'tree BallTreeInner<P, V>>>,
     i: usize,
@@ -361,6 +362,7 @@ impl<P: Point, V> BallTree<P, V> {
     }
 }
 
+/// A context for repeated nearest-neighbor queries that internally re-uses memory across queries.
 #[derive(Debug, Clone)]
 pub struct Query<'tree, P, V> {
     ball_tree: &'tree BallTree<P, V>,
@@ -375,7 +377,7 @@ impl<'tree, P: Point, V> Query<'tree, P, V> {
     pub fn nn<'query>(
         &'query mut self,
         point: &'query P,
-    ) -> impl Iterator<Item = (&'tree P, f64, &'tree V)> + 'query {
+    ) -> Iter<'tree, 'query, P, V> {
         self.nn_within(point, f64::INFINITY)
     }
 
@@ -384,7 +386,7 @@ impl<'tree, P: Point, V> Query<'tree, P, V> {
         &'query mut self,
         point: &'query P,
         max_radius: f64,
-    ) -> impl Iterator<Item = (&'tree P, f64, &'tree V)> + 'query {
+    ) -> Iter<'tree, 'query, P, V> {
         let balls = &mut self.balls;
         balls.push(Item(self.ball_tree.0.distance(point), &self.ball_tree.0));
         Iter {

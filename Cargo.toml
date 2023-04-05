@@ -1,8 +1,8 @@
 [package]
 name = "ball-tree"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Grant Slatton <grantslatton@gmail.com>"]
-edition = "2018"
+edition = "2021"
 include = ["src/**/*", "Cargo.toml"]
 description = "Ball-tree implementation for K-nearest neighbors"
 homepage = "https://github.com/grantslatton/ball-tree"
