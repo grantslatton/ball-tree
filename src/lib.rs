@@ -60,7 +60,7 @@ impl<const D: usize> Point for [f64; D] {
 
 // A little helper to allow us to use comparative functions on `f64`s by asserting that
 // `NaN` isn't present.
-#[derive(PartialEq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 struct OrdF64(f64);
 impl OrdF64 {
     fn new(x: f64) -> Self {
@@ -75,6 +75,7 @@ impl Ord for OrdF64 {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq)]
 struct Sphere<C> {
     center: C,
     radius: f64,
@@ -164,6 +165,7 @@ fn partition<P: Point, V>(
     ((aps, avs), (bps, bvs))
 }
 
+#[derive(Debug, Clone)]
 enum BallTreeInner<P, V> {
     Empty,
     Leaf(P, Vec<V>),
@@ -173,6 +175,12 @@ enum BallTreeInner<P, V> {
         Box<BallTreeInner<P, V>>,
         Box<BallTreeInner<P, V>>,
     ),
+}
+
+impl<P: Point, V> Default for BallTreeInner<P, V> {
+    fn default() -> Self {
+        BallTreeInner::Empty
+    }
 }
 
 impl<P: Point, V> BallTreeInner<P, V> {
@@ -214,6 +222,7 @@ impl<P: Point, V> BallTreeInner<P, V> {
 // * We only want to order based on the first element, so we need a custom
 //   implementation rather than deriving the order (which would require the value
 //   to be orderable which is not necessary).
+#[derive(Debug, Copy, Clone)]
 struct Item<T>(f64, T);
 impl<T> PartialEq for Item<T> {
     fn eq(&self, other: &Self) -> bool {
@@ -238,6 +247,7 @@ impl<T> Ord for Item<T> {
 // pop a leaf from the queue, that leaf is necessarily the next closest point. If we
 // pop a branch from the queue, add its children. The priority of a node is its
 // `distance` as defined above.
+#[derive(Debug)]
 struct Iter<'tree, 'query, P, V> {
     point: &'query P,
     balls: &'query mut BinaryHeap<Item<&'tree BallTreeInner<P, V>>>,
@@ -323,7 +333,14 @@ impl<'tree, 'query, P, V> Drop for Iter<'tree, 'query, P, V> {
 /// This implementation returns the nearest neighbors, their distances, and their
 /// associated values. Returning the distances allows the user to perform some
 /// sort of weighted interpolation of the neighbors for predictive purposes.
+#[derive(Debug, Clone)]
 pub struct BallTree<P, V>(BallTreeInner<P, V>);
+
+impl<P: Point, V> Default for BallTree<P, V> {
+    fn default() -> Self {
+        BallTree(BallTreeInner::default())
+    }
+}
 
 impl<P: Point, V> BallTree<P, V> {
     /// Construct this `BallTree`. Construction is somewhat expensive, so `BallTree`s
@@ -344,6 +361,7 @@ impl<P: Point, V> BallTree<P, V> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Query<'tree, P, V> {
     ball_tree: &'tree BallTree<P, V>,
     balls: BinaryHeap<Item<&'tree BallTreeInner<P, V>>>,
