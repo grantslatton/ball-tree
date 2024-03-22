@@ -81,6 +81,17 @@ struct Sphere<C> {
     radius: f64,
 }
 
+impl<C: Point> Sphere<C> {
+    fn nearest_distance(&self, p: &C) -> f64 {
+        let d = self.center.distance(p) - self.radius;
+        d.max(0.0)
+    }
+
+    fn farthest_distance(&self, p: &C) -> f64 {
+        self.center.distance(p) + self.radius
+    }
+}
+
 // Implementation of the "bouncing bubble" algorithm which essentially works like this:
 // * Pick a point `a` that is farthest from `points[0]`
 // * Pick a point `b` that is farthest from `a`
@@ -170,11 +181,12 @@ enum BallTreeInner<P, V> {
     Empty,
     Leaf(P, Vec<V>),
     // The sphere is a bounding sphere that encompasses this node (both children)
-    Branch(
-        Sphere<P>,
-        Box<BallTreeInner<P, V>>,
-        Box<BallTreeInner<P, V>>,
-    ),
+    Branch {
+        sphere: Sphere<P>,
+        a: Box<BallTreeInner<P, V>>,
+        b: Box<BallTreeInner<P, V>>,
+        count: usize,
+    },
 }
 
 impl<P: Point, V> Default for BallTreeInner<P, V> {
@@ -198,20 +210,21 @@ impl<P: Point, V> BallTreeInner<P, V> {
         } else if points.iter().all(|p| p == &points[0]) {
             BallTreeInner::Leaf(points.pop().unwrap(), values)
         } else {
+            let count = points.len();
             let sphere = bounding_sphere(&points);
             let ((aps, avs), (bps, bvs)) = partition(points, values);
             let (a_tree, b_tree) = (BallTreeInner::new(aps, avs), BallTreeInner::new(bps, bvs));
-            BallTreeInner::Branch(sphere, Box::new(a_tree), Box::new(b_tree))
+            BallTreeInner::Branch { sphere, a: Box::new(a_tree), b: Box::new(b_tree), count }
         }
     }
 
-    fn distance(&self, p: &P) -> f64 {
+    fn nearest_distance(&self, p: &P) -> f64 {
         match self {
             BallTreeInner::Empty => std::f64::INFINITY,
             // The distance to a leaf is the distance to the single point inside of it
             BallTreeInner::Leaf(p0, _) => p.distance(p0),
             // The distance to a branch is the distance to the edge of the bounding sphere
-            BallTreeInner::Branch(sphere, _, _) => p.distance(&sphere.center) - sphere.radius,
+            BallTreeInner::Branch { sphere, .. } => sphere.nearest_distance(p),
         }
     }
 }
@@ -272,9 +285,9 @@ impl<'tree, 'query, P: Point, V> Iterator for Iter<'tree, 'query, P, V> {
             // Reset index for the next leaf we encounter
             self.i = 0;
             // Expand branch nodes
-            if let Item(_, BallTreeInner::Branch(_, a, b)) = self.balls.pop().unwrap() {
-                let d_a = a.distance(self.point);
-                let d_b = b.distance(self.point);
+            if let Item(_, BallTreeInner::Branch { a, b, .. }) = self.balls.pop().unwrap() {
+                let d_a = a.nearest_distance(self.point);
+                let d_b = b.nearest_distance(self.point);
                 if d_a <= self.max_radius {
                     self.balls.push(Item(d_a, a));
                 }
@@ -284,12 +297,6 @@ impl<'tree, 'query, P: Point, V> Iterator for Iter<'tree, 'query, P, V> {
             }
         }
         None
-    }
-}
-
-impl<'tree, 'query, P, V> Drop for Iter<'tree, 'query, P, V> {
-    fn drop(&mut self) {
-        self.balls.clear();
     }
 }
 
@@ -388,13 +395,76 @@ impl<'tree, P: Point, V> Query<'tree, P, V> {
         max_radius: f64,
     ) -> Iter<'tree, 'query, P, V> {
         let balls = &mut self.balls;
-        balls.push(Item(self.ball_tree.0.distance(point), &self.ball_tree.0));
+        balls.clear();
+        balls.push(Item(self.ball_tree.0.nearest_distance(point), &self.ball_tree.0));
         Iter {
             point,
             balls,
             i: 0,
             max_radius,
         }
+    }
+
+    /// What is the minimum radius that encompasses `k` neighbors of `point`?
+    pub fn min_radius<'query>(&'query mut self, point: &'query P, k: usize) -> f64 {
+        let mut total_count = 0;
+        let balls = &mut self.balls;
+        balls.clear(); 
+        balls.push(Item(self.ball_tree.0.nearest_distance(point), &self.ball_tree.0));
+    
+        while let Some(Item(distance, node)) = balls.pop() {
+            match node {
+                BallTreeInner::Empty => {}
+                BallTreeInner::Leaf(_, vs) => {
+                    total_count += vs.len();
+                    if total_count >= k {
+                        return distance;
+                    }
+                }
+                BallTreeInner::Branch { sphere, a, b, count } => {
+                    let next_distance = balls.peek().map(|Item(d, _)| *d).unwrap_or(f64::INFINITY);
+                    if total_count + count < k && sphere.farthest_distance(point) < next_distance {
+                        total_count += count;
+                    } else {
+                        balls.push(Item(a.nearest_distance(point), &a));
+                        balls.push(Item(b.nearest_distance(point), &b));
+                    }
+                }
+            }
+        }
+    
+        f64::INFINITY
+    }
+
+    /// How many neighbors are `<= max_radius` of `point`?
+    pub fn count<'query>(&'query mut self, point: &'query P, max_radius: f64) -> usize {
+        let mut total = 0;
+        let balls = &mut self.balls;
+        balls.clear();
+        balls.push(Item(self.ball_tree.0.nearest_distance(point), &self.ball_tree.0));
+
+        while let Some(Item(nearest_distance, node)) = balls.pop() {
+            if nearest_distance > max_radius {
+                break;
+            }
+            match node {
+                BallTreeInner::Empty => {}
+                BallTreeInner::Leaf(_, vs) => {
+                    total += vs.len();
+                }
+                BallTreeInner::Branch { a, b, count, sphere} => {
+                    let next_distance = balls.peek().map(|Item(d, _)| *d).unwrap_or(f64::INFINITY).min(max_radius);
+                    if sphere.farthest_distance(point) < next_distance {
+                        total += count;
+                    } else {
+                        balls.push(Item(a.nearest_distance(point), &a));
+                        balls.push(Item(b.nearest_distance(point), &b));
+                    }
+                }
+            }
+        }
+    
+        total
     }
 
     /// Return the size in bytes of the memory this `Query` is keeping internally to avoid allocation.
@@ -404,7 +474,7 @@ impl<'tree, P: Point, V> Query<'tree, P, V> {
 
     /// The `Query` object re-uses memory internally to avoid allocation. This method deallocates that memory.
     pub fn deallocate_memory(&mut self) {
-        assert!(self.balls.is_empty());
+        self.balls.clear();
         self.balls.shrink_to_fit();
     }
 }
@@ -422,7 +492,7 @@ mod tests {
 
         macro_rules! random_small_f64 {
             () => {
-                rng.gen_range(-100.0, 100.0)
+                rng.gen_range(-100.0 ..= 100.0)
             };
         }
 
@@ -436,8 +506,14 @@ mod tests {
             };
         }
 
-        for _ in 0..1000 {
-            let point_count = rng.gen_range(0, 100usize);
+        for i in 0..1000 {
+            let point_count: usize = if i < 100 {
+                rng.gen_range(1..=3)
+            } else if i < 500 {
+                rng.gen_range(1..=10)
+            } else {
+                rng.gen_range(1..=100)
+            };
 
             let mut points = vec![];
             let mut values = vec![];
@@ -455,7 +531,7 @@ mod tests {
 
             for _ in 0..100 {
                 let point = random_3d_point!();
-                let max_radius = rng.gen_range(0.0, 110.0);
+                let max_radius = rng.gen_range(0.0 ..= 110.0);
 
                 let expected_values = points
                     .iter()
@@ -477,6 +553,14 @@ mod tests {
                 }
 
                 assert_eq!(expected_values, found_values);
+
+                assert_eq!(found_values.len(), query.count(&point, max_radius));
+
+                let radius = query.min_radius(&point, expected_values.len());
+
+                let should_be_fewer = query.count(&point, radius * 0.99);
+
+                assert!(expected_values.is_empty() || should_be_fewer < expected_values.len(), "{} < {}", should_be_fewer, expected_values.len());
             }
 
             assert!(query.allocated_size() > 0);

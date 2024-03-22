@@ -1,6 +1,6 @@
 [package]
 name = "ball-tree"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["Grant Slatton <grantslatton@gmail.com>"]
 edition = "2021"
 include = ["src/**/*", "Cargo.toml"]
@@ -15,5 +15,5 @@ readme="README.md"
 [dependencies]
 
 [dev-dependencies]
-rand = "0.6.5"
-rand_chacha = "0.1.1"
+rand = "0.8.5"
+rand_chacha = "0.3.1"
