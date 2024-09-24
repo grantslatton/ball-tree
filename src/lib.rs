@@ -20,11 +20,14 @@ pub trait Point: Sized + PartialEq {
     /// It is undefined behavior to use a distance that is negative, `NaN`, or greater
     /// than `self.distance(other)`.
     fn move_towards(&self, other: &Self, d: f64) -> Self;
-}
 
-fn midpoint<P: Point>(a: &P, b: &P) -> P {
-    let d = a.distance(b);
-    a.move_towards(b, d / 2.0)
+    /// The midpoint between two points is the point that is equidistant from both.
+    /// It should be equivalent to `a.move_towards(b, a.distance(b) / 2.0)`, but
+    /// may be implemented more efficiently for some types.
+    fn midpoint(a: &Self, b: &Self) -> Self {
+        let d = a.distance(b);
+        a.move_towards(b, d / 2.0)
+    }
 }
 
 /// Implement `Point` in the normal `D` dimensional Euclidean way for all arrays of floats. For example, a 2D point
@@ -54,6 +57,14 @@ impl<const D: usize> Point for [f64; D] {
             result[i] += scale * (other[i] - self[i]);
         }
 
+        result
+    }
+
+    fn midpoint(a: &Self, b: &Self) -> Self {
+        let mut result = [0.0; D];
+        for i in 0..D {
+            result[i] = (a[i] + b[i]) / 2.0;
+        }
         result
     }
 }
@@ -114,7 +125,7 @@ fn bounding_sphere<P: Point>(points: &[P]) -> Sphere<P> {
         .max_by_key(|b| OrdF64::new(a.distance(b)))
         .unwrap();
 
-    let mut center: P = midpoint(a, b);
+    let mut center: P = P::midpoint(a, b);
     let mut radius = center.distance(b).max(std::f64::EPSILON);
 
     loop {
