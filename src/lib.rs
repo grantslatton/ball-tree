@@ -70,7 +70,7 @@ impl<const D: usize> Point for [f64; D] {
 }
 
 /// Implement `Point` in the normal `D` dimensional Euclidean way for all arrays of floats. For example, a 2D point
-/// would be a `[f64; 2]`.
+/// would be a `[f32; 2]`.
 impl<const D: usize> Point for [f32; D] {
     fn distance(&self, other: &Self) -> f64 {
         self.iter()
