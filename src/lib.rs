@@ -69,6 +69,46 @@ impl<const D: usize> Point for [f64; D] {
     }
 }
 
+/// Implement `Point` in the normal `D` dimensional Euclidean way for all arrays of floats. For example, a 2D point
+/// would be a `[f64; 2]`.
+impl<const D: usize> Point for [f32; D] {
+    fn distance(&self, other: &Self) -> f64 {
+        self.iter()
+            .zip(other)
+            .map(|(a, b)| (*a - *b).powi(2))
+            .sum::<f32>()
+            .sqrt() as f64
+    }
+
+    fn move_towards(&self, other: &Self, d: f64) -> Self {
+        let mut result = self.clone();
+
+        let distance = self.distance(other);
+
+        // Don't want to get a NaN in the division below
+        if distance == 0.0 {
+            return result;
+        }
+
+        let scale = d / self.distance(other);
+        let scale = scale as f32;
+
+        for i in 0..D {
+            result[i] += scale * (other[i] - self[i]);
+        }
+
+        result
+    }
+
+    fn midpoint(a: &Self, b: &Self) -> Self {
+        let mut result = [0.0; D];
+        for i in 0..D {
+            result[i] = (a[i] + b[i]) / 2.0;
+        }
+        result
+    }
+}
+
 // A little helper to allow us to use comparative functions on `f64`s by asserting that
 // `NaN` isn't present.
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
@@ -372,7 +412,7 @@ impl<P: Point, V> BallTree<P, V> {
 
     /// Query this `BallTree`. The `Query` object provides a nearest-neighbor API and internally re-uses memory to avoid
     /// allocations on repeated queries.
-    pub fn query(&self) -> Query<P, V> {
+    pub fn query(&self) -> Query<'_, P, V> {
         Query {
             ball_tree: self,
             balls: Default::default(),
